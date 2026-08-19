@@ -113,17 +113,27 @@ export default async function handler(req: Request, res: Response) {
     }
 
     const arrayBuffer = await dlResp.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    let buffer = Buffer.from(arrayBuffer);
+
+
+    if (rangeQuery && dlResp.status === 200) {
+      const parts = rangeQuery.split('-');
+      const start = parseInt(parts[0], 10) || 0;
+      const end = parts[1] ? parseInt(parts[1], 10) : buffer.length - 1;
+      
+      const totalSize = buffer.length;
+      buffer = buffer.slice(start, end + 1);
+      
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+      res.status(206);
+    } else if (dlResp.headers.get('content-range')) {
+      res.setHeader('Content-Range', dlResp.headers.get('content-range')!);
+      res.status(206);
+    }
 
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
     res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
     res.setHeader('Content-Length', String(buffer.length));
-
-    // Jika ownCloud mengembalikan chunk (206 Partial Content), kita teruskan
-    if (dlResp.headers.get('content-range')) {
-      res.setHeader('Content-Range', dlResp.headers.get('content-range')!);
-      return res.status(206).end(buffer);
-    }
 
     return res.end(buffer);
 
