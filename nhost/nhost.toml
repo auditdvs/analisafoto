@@ -1,2 +1,3 @@
-[functions.storage]
-pattern = "storage/*"
+# Nhost configuration file
+# Functions inside nhost/functions/ are auto-discovered by Nhost.
+
