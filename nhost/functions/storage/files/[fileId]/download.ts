@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { listFiles, downloadFileStream } from '../../../../src/services/owncloud/client';
+import { listFiles, downloadFileStream } from '../../src/services/owncloud/client';
 
 const ALLOWED_PATH = '/DIVISI INTERNAL AUDIT/DVS/Analisa Foto Pencairan';
 
@@ -19,15 +19,14 @@ export default async function handler(req: Request, res: Response) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
   if (!isAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-  // fileId di sini adalah path yang di-encode Base64 atau nama file
-  const { fileId } = req.params as { fileId: string };
+  // Mengambil fileId dari Query Parameter (?fileId=...) karena dynamic path [...] ditolak AWS Lambda Nhost
+  const { fileId } = req.query as { fileId: string };
 
   if (!fileId) {
-    return res.status(400).json({ error: 'fileId is required' });
+    return res.status(400).json({ error: 'fileId query parameter is required' });
   }
 
   try {
-    // Temukan file dengan cara list folder dan cari berdasarkan id
     const files = await listFiles(ALLOWED_PATH);
     const file = files.find(f => f.id === fileId);
 
@@ -35,12 +34,10 @@ export default async function handler(req: Request, res: Response) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Path traversal protection — pastikan file.path ada dalam folder yang diizinkan
     if (!file.path.startsWith(ALLOWED_PATH)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Stream file dari ownCloud langsung ke response
     const ownCloudResponse = await downloadFileStream(file.path);
 
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
@@ -50,7 +47,6 @@ export default async function handler(req: Request, res: Response) {
       res.setHeader('Content-Length', file.size.toString());
     }
 
-    // Pipe response body langsung tanpa buffering seluruh file ke memory
     if (ownCloudResponse.body) {
       const reader = ownCloudResponse.body.getReader();
       while (true) {
@@ -60,7 +56,6 @@ export default async function handler(req: Request, res: Response) {
       }
       res.end();
     } else {
-      // Fallback jika ReadableStream tidak tersedia
       const buffer = await ownCloudResponse.arrayBuffer();
       res.end(Buffer.from(buffer));
     }
