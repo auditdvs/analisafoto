@@ -1,8 +1,2 @@
-{
-  "functions": {
-    "storage": {
-      "pattern": "storage/*",
-      "buildCommand": "tsc"
-    }
-  }
-}
+[functions.storage]
+pattern = "storage/*"
