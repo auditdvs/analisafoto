@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "storage": {
+      "pattern": "storage/*",
+      "buildCommand": "tsc"
+    }
+  }
+}
