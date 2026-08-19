@@ -96,46 +96,20 @@ export default async function handler(req: Request, res: Response) {
     if (!file) return res.status(404).json({ error: 'File not found' });
     if (!file.path.startsWith(ALLOWED_PATH)) return res.status(403).json({ error: 'Access denied' });
 
-    // Ambil instruksi Range dari query parameter untuk menghindari blokir CORS Header
-    const rangeQuery = req.query.range as string | undefined;
-    const fetchHeaders: any = { Authorization: authHeader() };
-    if (rangeQuery) {
-      fetchHeaders['Range'] = `bytes=${rangeQuery}`;
-    }
+    // Karena proxying data gagal akibat Timeout 10s Nhost, kita buat Direct URL
+    // yang membungkus kredensial ke dalam URL agar browser bisa mendownloadnya langsung
+    
+    // Pastikan path di-encode agar spasi menjadi %20
+    const encodedPath = file.path.split('/').map(encodeURIComponent).join('/');
+    
+    // Pisahkan protokol dan host
+    const host = BASE_URL.replace('https://', '').replace('http://', '');
+    const proto = BASE_URL.startsWith('https') ? 'https://' : 'http://';
+    
+    // Buat URL sakti: https://username:password@cloud.komida.co.id/remote.php/webdav/...
+    const directUrl = `${proto}${encodeURIComponent(USERNAME)}:${encodeURIComponent(PASSWORD)}@${host}/remote.php/webdav${encodedPath}`;
 
-    const dlResp = await (fetch as any)(`${WEBDAV_BASE}${file.path}`, {
-      headers: fetchHeaders,
-      agent,
-    });
-
-    if (!dlResp.ok && dlResp.status !== 206) {
-      throw new Error(`Download HTTP ${dlResp.status}`);
-    }
-
-    const arrayBuffer = await dlResp.arrayBuffer();
-    let buffer = Buffer.from(arrayBuffer);
-
-
-    if (rangeQuery && dlResp.status === 200) {
-      const parts = rangeQuery.split('-');
-      const start = parseInt(parts[0], 10) || 0;
-      const end = parts[1] ? parseInt(parts[1], 10) : buffer.length - 1;
-      
-      const totalSize = buffer.length;
-      buffer = buffer.slice(start, end + 1);
-      
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-      res.status(206);
-    } else if (dlResp.headers.get('content-range')) {
-      res.setHeader('Content-Range', dlResp.headers.get('content-range')!);
-      res.status(206);
-    }
-
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
-    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Length', String(buffer.length));
-
-    return res.end(buffer);
+    return res.status(200).json({ directUrl });
 
   } catch (err: any) {
     console.error('[storage/download]', err.message);
