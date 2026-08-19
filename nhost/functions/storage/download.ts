@@ -96,27 +96,57 @@ export default async function handler(req: Request, res: Response) {
     if (!file) return res.status(404).json({ error: 'File not found' });
     if (!file.path.startsWith(ALLOWED_PATH)) return res.status(403).json({ error: 'Access denied' });
 
-    // Stream file langsung dari ownCloud
-    const downloadUrl = `${WEBDAV_BASE}${file.path}`;
-    const dlResp = await (fetch as any)(downloadUrl, {
-      headers: { Authorization: authHeader() },
+    // Minta ownCloud membuatkan Public Share Link via OCS API
+    const ocsUrl = `${BASE_URL}/ocs/v1.php/apps/files_sharing/api/v1/shares?format=json`;
+    const params = new URLSearchParams();
+    params.append('path', file.path);
+    params.append('shareType', '3'); // 3 = public link
+    params.append('permissions', '1'); // 1 = read-only
+
+    let shareResp = await (fetch as any)(ocsUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader(),
+        'OCS-APIRequest': 'true',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: params.toString(),
       agent,
     });
 
-    if (!dlResp.ok) throw new Error(`Download ${dlResp.status}`);
+    let shareData = await shareResp.json();
+    let publicUrl = '';
 
-    // Lambda Nhost tidak mendukung HTTP chunk streaming bawaan, jadi kita baca seluruh buffer
-    const arrayBuffer = await dlResp.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    // Status 100 = OK, berhasil dibuat
+    if (shareData.ocs?.meta?.statuscode === 100) {
+      publicUrl = shareData.ocs.data.url;
+    } else {
+      // Jika error (misalnya file sudah pernah di-share sebelumnya), kita ambil list share yang ada
+      const getSharesUrl = `${BASE_URL}/ocs/v1.php/apps/files_sharing/api/v1/shares?path=${encodeURIComponent(file.path)}&format=json`;
+      const getResp = await (fetch as any)(getSharesUrl, {
+        method: 'GET',
+        headers: { 'Authorization': authHeader(), 'OCS-APIRequest': 'true' },
+        agent
+      });
+      const getJson = await getResp.json();
+      if (getJson.ocs?.meta?.statuscode === 100 && getJson.ocs.data.length > 0) {
+        // Cari share type 3 (public)
+        const publicShare = getJson.ocs.data.find((s: any) => s.share_type === 3);
+        if (publicShare) {
+          publicUrl = publicShare.url;
+        }
+      }
+    }
 
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
-    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Length', String(buffer.length));
+    if (!publicUrl) {
+      throw new Error(shareData.ocs?.meta?.message || 'Gagal mendapatkan public link dari ownCloud');
+    }
 
-    return res.end(buffer);
+    // Redirect browser langsung ke ownCloud public link (ditambah /download agar otomatis mengunduh)
+    return res.redirect(302, `${publicUrl}/download`);
 
   } catch (err: any) {
     console.error('[storage/download]', err.message);
-    return res.status(502).json({ error: `Failed to download file from ownCloud: ${err.message}` });
+    return res.status(502).json({ error: `Gagal memproses download: ${err.message}` });
   }
 }
