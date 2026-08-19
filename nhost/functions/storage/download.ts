@@ -67,8 +67,8 @@ const PROPFIND_BODY = `<?xml version="1.0" encoding="UTF-8"?>
 export default async function handler(req: Request, res: Response) {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type, Content-Range');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -96,54 +96,34 @@ export default async function handler(req: Request, res: Response) {
     if (!file) return res.status(404).json({ error: 'File not found' });
     if (!file.path.startsWith(ALLOWED_PATH)) return res.status(403).json({ error: 'Access denied' });
 
-    // Minta ownCloud membuatkan Public Share Link via OCS API
-    const ocsUrl = `${BASE_URL}/ocs/v1.php/apps/files_sharing/api/v1/shares?format=json`;
-    const params = new URLSearchParams();
-    params.append('path', file.path);
-    params.append('shareType', '3'); // 3 = public link
-    params.append('permissions', '1'); // 1 = read-only
+    // Ambil header Range dari frontend (jika ada)
+    const range = req.headers['range'] as string | undefined;
+    const fetchHeaders: any = { Authorization: authHeader() };
+    if (range) fetchHeaders['Range'] = range;
 
-    let shareResp = await (fetch as any)(ocsUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': authHeader(),
-        'OCS-APIRequest': 'true',
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: params.toString(),
+    const dlResp = await (fetch as any)(`${WEBDAV_BASE}${file.path}`, {
+      headers: fetchHeaders,
       agent,
     });
 
-    let shareData = await shareResp.json();
-    let publicUrl = '';
-
-    // Status 100 = OK, berhasil dibuat
-    if (shareData.ocs?.meta?.statuscode === 100) {
-      publicUrl = shareData.ocs.data.url;
-    } else {
-      // Jika error (misalnya file sudah pernah di-share sebelumnya), kita ambil list share yang ada
-      const getSharesUrl = `${BASE_URL}/ocs/v1.php/apps/files_sharing/api/v1/shares?path=${encodeURIComponent(file.path)}&format=json`;
-      const getResp = await (fetch as any)(getSharesUrl, {
-        method: 'GET',
-        headers: { 'Authorization': authHeader(), 'OCS-APIRequest': 'true' },
-        agent
-      });
-      const getJson = await getResp.json();
-      if (getJson.ocs?.meta?.statuscode === 100 && getJson.ocs.data.length > 0) {
-        // Cari share type 3 (public)
-        const publicShare = getJson.ocs.data.find((s: any) => s.share_type === 3);
-        if (publicShare) {
-          publicUrl = publicShare.url;
-        }
-      }
+    if (!dlResp.ok && dlResp.status !== 206) {
+      throw new Error(`Download HTTP ${dlResp.status}`);
     }
 
-    if (!publicUrl) {
-      throw new Error(shareData.ocs?.meta?.message || 'Gagal mendapatkan public link dari ownCloud');
+    const arrayBuffer = await dlResp.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', String(buffer.length));
+
+    // Jika ownCloud mengembalikan chunk (206 Partial Content), kita teruskan
+    if (dlResp.headers.get('content-range')) {
+      res.setHeader('Content-Range', dlResp.headers.get('content-range')!);
+      return res.status(206).end(buffer);
     }
 
-    // Redirect browser langsung ke ownCloud public link (ditambah /download agar otomatis mengunduh)
-    return res.redirect(302, `${publicUrl}/download`);
+    return res.end(buffer);
 
   } catch (err: any) {
     console.error('[storage/download]', err.message);
