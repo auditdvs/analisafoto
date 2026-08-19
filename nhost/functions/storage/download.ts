@@ -67,7 +67,7 @@ const PROPFIND_BODY = `<?xml version="1.0" encoding="UTF-8"?>
 export default async function handler(req: Request, res: Response) {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type, Content-Range');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -96,10 +96,12 @@ export default async function handler(req: Request, res: Response) {
     if (!file) return res.status(404).json({ error: 'File not found' });
     if (!file.path.startsWith(ALLOWED_PATH)) return res.status(403).json({ error: 'Access denied' });
 
-    // Ambil header Range dari frontend (jika ada)
-    const range = req.headers['range'] as string | undefined;
+    // Ambil instruksi Range dari query parameter untuk menghindari blokir CORS Header
+    const rangeQuery = req.query.range as string | undefined;
     const fetchHeaders: any = { Authorization: authHeader() };
-    if (range) fetchHeaders['Range'] = range;
+    if (rangeQuery) {
+      fetchHeaders['Range'] = `bytes=${rangeQuery}`;
+    }
 
     const dlResp = await (fetch as any)(`${WEBDAV_BASE}${file.path}`, {
       headers: fetchHeaders,
